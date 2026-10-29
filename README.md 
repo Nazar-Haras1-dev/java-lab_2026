@@ -1,0 +1,239 @@
+# Library: Lab 1 (Spring Security: OIDC + JWT)
+
+Навчальний застосунок предметної області **Library (бібліотека)** з базовим CRUD, схемою БД під контролем міграцій, простим веб-UI та **двома паралельними способами автентифікації**:
+
+- **OIDC (Keycloak)** для користувачів, які працюють через браузер (UI);
+- **JWT (Bearer-токен)** для прямих запитів до REST API (Postman, curl).
+
+Проєкт задуманий як технічний фундамент для подальшого розвитку в багатомодульну систему (за планом: читачі, видачі книг, автори). Зараз реалізована одна сутність: `Book`.
+
+---
+
+## 1. Навіщо обрана саме ця предметна область
+
+Бібліотека має природний набір пов'язаних сутностей (книги, автори, читачі, видачі), тому на цій основі можна нарощувати функціональність протягом семестру, не змінюючи основу. У цій лабораторній реалізована лише `Book`, решта сутностей є планами на наступні роботи.
+
+---
+
+## 2. Стек технологій
+
+| Технологія | Версія (за збіркою проєкту) | Для чого використовується |
+|---|---|---|
+| Java | 17 у `pom.xml` (запуск перевірявся на JDK 21) | мова програмування |
+| Spring Boot | 3.3.5 | каркас застосунку, автоналаштування |
+| Spring Web (MVC) | 6.1.14 | REST-контролери та UI-контролер |
+| Spring Data JPA + Hibernate | Hibernate 6.5.3 | робота з БД через репозиторії та сутності |
+| Spring Security | 6.3.4 | автентифікація та авторизація |
+| OAuth2 Client | 6.3.4 | OIDC-логін для UI |
+| OAuth2 Resource Server | 6.3.4 | перевірка JWT для API |
+| Liquibase | 4.27.0 | міграції схеми БД |
+| MapStruct | 1.5.5.Final | генерація маперів Entity ↔ DTO на етапі компіляції |
+| Thymeleaf | 3.1.2 | шаблони простого UI |
+| Bean Validation (Hibernate Validator) | 8.0.1 | валідація DTO |
+| PostgreSQL | 16 (Docker-образ) або Postgres.app | реляційна БД |
+| Keycloak | 25.0.6 | Identity Provider (IdP): логін, видача токенів, ролі |
+| Postman | будь-яка актуальна | колекція API-запитів для захисту роботи |
+| Maven | через Maven Wrapper/IDE | збірка |
+
+---
+
+## 3. Архітектура
+
+Шарова структура:
+
+```
+Controller  →  Service  →  Repository  →  Entity (таблиця в PostgreSQL)
+     ↑            ↑
+    DTO ←→ MapStruct Mapper
+```
+
+- **Controller** приймає запит і повертає відповідь, бізнес-логіки не містить.
+- **Service** містить бізнес-правила, керує транзакціями, містить `@PreAuthorize`.
+- **Repository** доступ до БД через Spring Data JPA (без ручного SQL).
+- **Entity** відображення таблиці `books`.
+- **DTO** об'єкт, який ходить між клієнтом і контролером. Через нього внутрішня модель БД не виходить назовні, і на ньому ж задана валідація.
+- **Mapper (MapStruct)** конвертує Entity ↔ DTO. Реалізацію `BookMapperImpl` MapStruct генерує під час компіляції (папка `target/generated-sources/annotations`), без reflection.
+
+---
+
+## 5. Опис класів і файлів
+
+### 5.1. Дані
+
+**`entity/Book`** JPA-сутність, таблиця `books`.
+Поля: `id` (автогенерація `IDENTITY`), `title`, `author`, `isbn` (унікальний, до 20 символів), `publishedYear` (колонка `published_year`, необов'язкове).
+
+**`repository/BookRepository`** розширює `JpaRepository<Book, Long>`. Дає готові `findAll`, `findById`, `save`, `delete`, `count`. Додатково містить два похідні методи (Spring генерує запит за назвою):
+- `existsByIsbn(String isbn)` перевірка дубліката ISBN при створенні;
+- `existsByIsbnAndIdNot(String isbn, Long id)` перевірка дубліката ISBN при оновленні (ігнорує саму редаговану книгу).
+
+**`dto/BookDto`** об'єкт передачі даних із валідацією:
+- `title`, `author`: обов'язкові, до 255 символів;
+- `isbn`: обов'язковий, до 20 символів;
+- `publishedYear`: необов'язковий, але якщо вказаний, то від 1000 до 2100.
+
+**`mapper/BookMapper`** інтерфейс MapStruct (`componentModel = "spring"`, тому мапер доступний як Spring-бін):
+- `toDto(Book)` Entity → DTO;
+- `toEntity(BookDto)` DTO → Entity (поле `id` ігнорується, його генерує БД);
+- `updateEntity(BookDto, @MappingTarget Book)` переносить значення з DTO в уже існуючу сутність (також без `id`).
+
+### 5.2. Бізнес-логіка
+
+**`service/BookService`** на рівні класу `@Transactional(readOnly = true)`, а методи, що змінюють дані, мають окремий `@Transactional`.
+
+| Метод | Що робить |
+|---|---|
+| `findAll()` | повертає список усіх книг у вигляді DTO |
+| `findById(id)` | повертає книгу або кидає `ResourceNotFoundException` |
+| `count()` | кількість книг (використовується в `/api/admin/stats`) |
+| `create(dto)` | перевіряє унікальність ISBN (`DuplicateResourceException`), зберігає |
+| `update(id, dto)` | знаходить книгу, перевіряє ISBN на дубль серед інших книг, оновлює |
+| `delete(id)` | видаляє книгу. Має **`@PreAuthorize("hasRole('ADMIN')")`**, тому доступний лише ADMIN |
+
+### 5.3. Контролери
+
+**`controller/BookRestController`**: REST API, префікс `/api/books`.
+
+| Метод | Шлях | Дія | Успішна відповідь |
+|---|---|---|---|
+| GET | `/api/books` | список книг | 200 |
+| GET | `/api/books/{id}` | книга за id | 200 |
+| POST | `/api/books` | створення (з `@Valid`) | 201 + заголовок Location |
+| PUT | `/api/books/{id}` | оновлення (з `@Valid`) | 200 |
+| DELETE | `/api/books/{id}` | видалення | 204 |
+
+**`controller/AdminRestController`**: `GET /api/admin/stats` повертає `{"totalBooks": N}`. Шлях захищений правилом у `SecurityFilterChain` (лише ADMIN).
+
+**`controller/BookUiController`**: веб-UI (Thymeleaf), працює з сесією після OIDC-логіну.
+
+| Метод | Шлях | Дія |
+|---|---|---|
+| GET | `/` | редирект на `/books` |
+| GET | `/books` | список книг, показує ім'я користувача та його ролі |
+| GET | `/books/new` | форма створення |
+| POST | `/books` | збереження нової книги (при помилці валідації або дублі ISBN форма показується знову) |
+| GET | `/books/{id}/edit` | форма редагування |
+| POST | `/books/{id}` | збереження змін |
+| POST | `/books/{id}/delete` | видалення (лише ADMIN, через `@PreAuthorize` у сервісі) |
+
+### 5.4. Обробка помилок
+
+**`exception/RestExceptionHandler`**: `@RestControllerAdvice`, що діє **лише** для `BookRestController` і `AdminRestController` (параметр `assignableTypes`). Перетворює винятки на відповіді формату `ProblemDetail`:
+
+| Виняток | HTTP-статус |
+|---|---|
+| `ResourceNotFoundException` | 404 |
+| `DuplicateResourceException` | 409 |
+| `MethodArgumentNotValidException` (валідація) | 400 |
+| `AccessDeniedException` (від `@PreAuthorize`) | 403 з поясненням і записом у лог |
+
+`ResourceNotFoundException` і `DuplicateResourceException` власні винятки.
+
+### 5.5. Безпека
+
+**`config/SecurityConfig`**: головний клас безпеки. `@EnableWebSecurity` вмикає веб-безпеку, `@EnableMethodSecurity` вмикає `@PreAuthorize`. Містить **два незалежні `SecurityFilterChain`** (див. розділ 6).
+
+**`security/KeycloakRoleConverter`**: допоміжний клас. Keycloak кладе ролі realm у claim `realm_access.roles` (наприклад, `["ADMIN","USER"]`). Spring Security за замовчуванням цей claim не розуміє, тому клас перетворює кожну роль на `ROLE_<назва>` (`ROLE_ADMIN`, `ROLE_USER`), як того вимагає `hasRole(...)`.
+
+**`security/KeycloakOidcUserService`**: використовується в ланцюжку UI. Після успішного OIDC-логіну бере access token, читає з нього `realm_access` і додає ролі до об'єкта користувача, який зберігається в сесії.
+
+---
+
+## 6. Як працює безпека
+
+### 6.1. Два ланцюжки фільтрів
+
+Запит потрапляє в один із двох `SecurityFilterChain` залежно від шляху.
+
+| | Ланцюжок 1 (`@Order(1)`) | Ланцюжок 2 (`@Order(2)`) |
+|---|---|---|
+| Шляхи | `/api/**` | усе інше (UI) |
+| Клієнт | Postman, curl | браузер |
+| Механізм | OAuth2 Resource Server, JWT | OAuth2 Login (OIDC) |
+| Стан | **STATELESS**, без сесії | HTTP-сесія (`JSESSIONID`) |
+| CSRF | вимкнено | увімкнено (стандартно) |
+| Без автентифікації | 401 | редирект на логін Keycloak |
+
+### 6.2. Потік OIDC (UI)
+
+1. Неавтентифікований користувач відкриває `http://localhost:8080`.
+2. Spring Security перенаправляє його на сторінку логіну Keycloak.
+3. Після введення логіну і пароля Keycloak повертає користувача на `/login/oauth2/code/keycloak` з одноразовим кодом (Authorization Code Flow).
+4. Застосунок обмінює код на токени, `KeycloakOidcUserService` додає ролі, створюється HTTP-сесія.
+5. Logout виконується через Keycloak (`OidcClientInitiatedLogoutSuccessHandler`), завершуючи й сесію в IdP.
+
+### 6.3. Потік JWT (API)
+
+1. Клієнт отримує токен у Keycloak (у тестах використовується Resource Owner Password flow: запит до `/realms/library/protocol/openid-connect/token`).
+2. Клієнт надсилає запит із заголовком `Authorization: Bearer <access_token>`.
+3. Застосунок перевіряє підпис токена за публічними ключами Keycloak (`issuer-uri`), термін дії та issuer.
+4. `JwtAuthenticationConverter` перетворює claim `realm_access.roles` на `ROLE_*`. Ім'я користувача береться з `preferred_username`.
+
+### 6.4. Два рівні обмеження доступу
+
+| Рівень | Де задано | Правило | Результат при порушенні |
+|---|---|---|---|
+| `SecurityFilterChain` | `SecurityConfig`: `requestMatchers("/api/admin/**").hasRole("ADMIN")` | `/api/admin/**` лише для ADMIN | **403 з порожнім тілом** (відповідь фільтра, контролер не викликається) |
+| `@PreAuthorize` | `BookService.delete`: `@PreAuthorize("hasRole('ADMIN')")` | видаляти книги може лише ADMIN | **403 з JSON-поясненням**, метод не виконується (`AccessDeniedException`) |
+
+Для `/api/books/**` фільтр вимагає лише автентифікацію (`authenticated()`), тому обмеження на видалення працює саме завдяки `@PreAuthorize`, незалежно від правил фільтра. В UI при спробі видалення користувачем `user` показується стандартна сторінка помилки Spring Boot зі статусом 403.
+
+### 6.5. Матриця доступу
+
+| Дія | Без автентифікації | USER | ADMIN |
+|---|---|---|---|
+| `GET/POST/PUT /api/books...` | 401 | дозволено | дозволено |
+| `DELETE /api/books/{id}` | 401 | **403** (`@PreAuthorize`) | 204 |
+| `GET /api/admin/stats` | 401 | **403** (фільтр) | 200 |
+| UI `/books...` | редирект на Keycloak | дозволено | дозволено |
+| UI Delete | редирект на Keycloak | **403** | дозволено |
+
+---
+
+## 7. База даних і міграції (Liquibase)
+
+Схему створює Liquibase, а не Hibernate і не ручні SQL-скрипти.
+
+- Головний файл: `db/changelog/db.changelog-master.yaml` підключає changeSet-и.
+- `001-create-books-table.yaml` створює таблицю `books` (id: автоінкремент; title, author: `VARCHAR(255) NOT NULL`; isbn: `VARCHAR(20) NOT NULL UNIQUE`; published_year: `INTEGER`).
+- Liquibase веде таблицю `databasechangelog`, де зафіксовано виконані changeSet-и, тому повторні запуски не дублюють зміни. Таблиця `databasechangeloglock` не дає двом екземплярам виконувати міграції одночасно.
+- У `application.yml` задано `spring.jpa.hibernate.ddl-auto: validate`. Hibernate лише звіряє сутності зі схемою і нічого не створює. Якщо вони розходяться, застосунок не запуститься.
+
+При старті на чистій БД створюються таблиці `books`, `databasechangelog`, `databasechangeloglock`.
+
+---
+
+## 8. Конфігурація (`application.yml`)
+
+| Параметр | Значення | Призначення |
+|---|---|---|
+| `server.port` | 8080 | порт застосунку |
+| `spring.datasource.*` | `jdbc:postgresql://localhost:5432/library`, користувач `library`, пароль `library` | підключення до PostgreSQL |
+| `spring.jpa.hibernate.ddl-auto` | `validate` | Hibernate лише перевіряє схему |
+| `spring.jpa.open-in-view` | `false` | сесія Hibernate не тримається відкритою під час рендеру UI |
+| `spring.liquibase.change-log` | `classpath:db/changelog/db.changelog-master.yaml` | розташування міграцій |
+| `...client.registration.keycloak.*` | client-id `library-app`, scope `openid,profile,email`, Authorization Code | налаштування OIDC-клієнта |
+| `...client.provider.keycloak.issuer-uri` | `http://localhost:8180/realms/library` | адреса IdP (звідти завантажується конфігурація й ключі) |
+| `...resourceserver.jwt.issuer-uri` | `http://localhost:8180/realms/library` | звідки брати ключі для перевірки JWT |
+
+Важливо: при старті застосунок звертається до `issuer-uri`, тому **Keycloak має бути запущений до застосунку**.
+
+---
+
+## 9. Keycloak (realm `library`)
+
+Realm імпортується з `keycloak/realm-library.json`:
+
+- **Ролі realm:** `ADMIN`, `USER`.
+- **Клієнт:** `library-app` (confidential, secret `library-secret`), дозволені Authorization Code та Direct Access Grants (останнє використовується для отримання токена в Postman). Redirect URI: `http://localhost:8080/*`.
+- **Термін життя access token:** 1800 секунд (30 хвилин).
+- **Користувачі:**
+
+| Логін | Пароль | Ролі |
+|---|---|---|
+| admin | admin | ADMIN, USER |
+| user | user | USER |
+
+Адмін-консоль Keycloak: http://localhost:8180 (admin / admin).
+
+---

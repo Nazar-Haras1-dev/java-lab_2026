@@ -1,0 +1,50 @@
+{
+  "realm": "library",
+  "enabled": true,
+  "sslRequired": "none",
+  "accessTokenLifespan": 1800,
+  "roles": {
+    "realm": [
+      { "name": "ADMIN" },
+      { "name": "USER" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "library-app",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "library-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:8080/*"],
+      "webOrigins": ["http://localhost:8080"],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:8080/*"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@example.com",
+      "emailVerified": true,
+      "firstName": "Admin",
+      "lastName": "Library",
+      "credentials": [{ "type": "password", "value": "admin", "temporary": false }],
+      "realmRoles": ["ADMIN", "USER"]
+    },
+    {
+      "username": "user",
+      "enabled": true,
+      "email": "user@example.com",
+      "emailVerified": true,
+      "firstName": "Simple",
+      "lastName": "User",
+      "credentials": [{ "type": "password", "value": "user", "temporary": false }],
+      "realmRoles": ["USER"]
+    }
+  ]
+}
