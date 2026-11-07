@@ -1,0 +1,21 @@
+$kind: http-request
+url: "{{baseUrl}}/api/books"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "title": "Refactoring",
+      "author": "Martin Fowler",
+      "isbn": "{{isbn13}}",
+      "publishedYear": 2018
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('201', () => pm.response.to.have.status(201));
+      pm.collectionVariables.set('bookId', pm.response.json().id);
+    language: text/javascript
+order: 2000

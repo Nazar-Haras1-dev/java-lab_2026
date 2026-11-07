@@ -1,0 +1,13 @@
+# Use this workspace to collaborate
+workspace:
+  id: b5cea4f6-fb4a-48b0-824f-43d7c621f1ed
+
+cloudResources:
+  collections:
+    ../postman/collections/Library Lab 4 - AOP: b53e635b-4276-4220-9717-8b692de40aca
+
+# All resources in the `postman/` folder are automatically registered in Local View.
+# Point to additional files outside the `postman/` folder to register them individually. Example:
+#localResources:
+#  collections:
+#    - ../tests/E2E Test Collection/

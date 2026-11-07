@@ -1,0 +1,112 @@
+{
+  "info": { "name": "Library Lab 4 - AOP", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+  "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+  "event": [{ "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+    "const d = [9,7,8];",
+    "for (let i = 0; i < 9; i++) { d.push(Math.floor(Math.random() * 10)); }",
+    "const sum = d.reduce((s, x, i) => s + x * (i % 2 === 0 ? 1 : 3), 0);",
+    "const check = (10 - (sum % 10)) % 10;",
+    "pm.collectionVariables.set('isbn13', d.join('') + check);"
+  ]}}],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "keycloakUrl", "value": "http://localhost:8180" },
+    { "key": "adminToken", "value": "" },
+    { "key": "bookId", "value": "" },
+    { "key": "isbn13", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 Get ADMIN token",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('200', () => pm.response.to.have.status(200));",
+        "pm.collectionVariables.set('adminToken', pm.response.json().access_token);"
+      ]}}],
+      "request": { "method": "POST", "auth": { "type": "noauth" }, "header": [],
+        "body": { "mode": "urlencoded", "urlencoded": [
+          { "key": "grant_type", "value": "password" }, { "key": "client_id", "value": "library-app" },
+          { "key": "client_secret", "value": "library-secret" }, { "key": "username", "value": "admin" },
+          { "key": "password", "value": "admin" } ] },
+        "url": "{{keycloakUrl}}/realms/library/protocol/openid-connect/token" }
+    },
+    {
+      "name": "02 CREATE book (@Audited + @RateLimited in BookService)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('201', () => pm.response.to.have.status(201));",
+        "pm.collectionVariables.set('bookId', pm.response.json().id);"
+      ]}}],
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"title\": \"Refactoring\",\n  \"author\": \"Martin Fowler\",\n  \"isbn\": \"{{isbn13}}\",\n  \"publishedYear\": 2018\n}" },
+        "url": "{{baseUrl}}/api/books" }
+    },
+    {
+      "name": "03 AUDIT contains CREATE_BOOK by admin",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('200', () => pm.response.to.have.status(200));",
+        "pm.test('create audited', () => pm.expect(pm.response.json().some(e => e.action === 'CREATE_BOOK' && e.user === 'admin')).to.be.true);"
+      ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/admin/aop-demo/audit" }
+    },
+    {
+      "name": "04 DELETE book (@Audited)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('204', () => pm.response.to.have.status(204));"
+      ]}}],
+      "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/api/books/{{bookId}}" }
+    },
+    {
+      "name": "05 AUDIT contains DELETE_BOOK",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('delete audited', () => pm.expect(pm.response.json().some(e => e.action === 'DELETE_BOOK')).to.be.true);"
+      ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/admin/aop-demo/audit" }
+    },
+    {
+      "name": "06 External call -> audit recorded (1)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('200', () => pm.response.to.have.status(200));",
+        "pm.test('aspect fired', () => pm.expect(pm.response.json().auditEntriesAdded).to.eql(1));"
+      ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/admin/aop-demo/audited-external" }
+    },
+    {
+      "name": "07 SELF-INVOCATION -> audit NOT recorded (0)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('200, method still executed', () => pm.response.to.have.status(200));",
+        "pm.test('aspect bypassed', () => pm.expect(pm.response.json().auditEntriesAdded).to.eql(0));"
+      ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/admin/aop-demo/audited-self-invocation" }
+    },
+    {
+      "name": "08 RETRY: 2 failures then success -> 3 attempts",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('200', () => pm.response.to.have.status(200));",
+        "pm.test('3 attempts', () => pm.expect(pm.response.json().attempts).to.eql(3));"
+      ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/admin/aop-demo/retry?failures=2" }
+    },
+    {
+      "name": "09 RATE-LIMITED call 1 -> 200",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [ "pm.test('200', () => pm.response.to.have.status(200));" ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/admin/aop-demo/rate-limited" }
+    },
+    {
+      "name": "10 RATE-LIMITED call 2 -> 200",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [ "pm.test('200', () => pm.response.to.have.status(200));" ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/admin/aop-demo/rate-limited" }
+    },
+    {
+      "name": "11 RATE-LIMITED call 3 -> 200",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [ "pm.test('200', () => pm.response.to.have.status(200));" ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/admin/aop-demo/rate-limited" }
+    },
+    {
+      "name": "12 RATE-LIMITED call 4 -> 429",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('429 Too Many Requests', () => pm.response.to.have.status(429));",
+        "pm.test('message from aspect', () => pm.expect(pm.response.json().detail).to.include('Rate limit exceeded'));"
+      ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/admin/aop-demo/rate-limited" }
+    }
+  ]
+}
