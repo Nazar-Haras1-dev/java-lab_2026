@@ -1,0 +1,11 @@
+$kind: http-request
+name: 06 External call -> audit recorded (1)
+url: "{{baseUrl}}/api/admin/aop-demo/audited-external"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('200', () => pm.response.to.have.status(200));
+      pm.test('aspect fired', () => pm.expect(pm.response.json().auditEntriesAdded).to.eql(1));
+    language: text/javascript
+order: 6000

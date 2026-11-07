@@ -1,0 +1,13 @@
+$kind: http-request
+name: "08 RETRY: 2 failures then success -> 3 attempts"
+url: "{{baseUrl}}/api/admin/aop-demo/retry?failures=2"
+method: GET
+queryParams:
+  failures: "2"
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('200', () => pm.response.to.have.status(200));
+      pm.test('3 attempts', () => pm.expect(pm.response.json().attempts).to.eql(3));
+    language: text/javascript
+order: 8000

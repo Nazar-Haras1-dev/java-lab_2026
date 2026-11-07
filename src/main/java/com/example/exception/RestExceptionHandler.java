@@ -1,5 +1,5 @@
 package com.example.library.exception;
-
+import com.example.library.controller.AopDemoController;
 import com.example.library.controller.AdminRestController;
 import com.example.library.controller.BookRestController;
 import org.slf4j.Logger;
@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.stream.Collectors;
 
-@RestControllerAdvice(assignableTypes = {BookRestController.class, AdminRestController.class})
+@RestControllerAdvice(assignableTypes = {BookRestController.class, AdminRestController.class, AopDemoController.class})
 public class RestExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(RestExceptionHandler.class);
@@ -27,7 +27,10 @@ public class RestExceptionHandler {
     public ProblemDetail handleDuplicate(DuplicateResourceException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
     }
-
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ProblemDetail handleRateLimit(RateLimitExceededException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
+    }
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ProblemDetail handleValidation(MethodArgumentNotValidException ex) {
         String details = ex.getBindingResult().getFieldErrors().stream()

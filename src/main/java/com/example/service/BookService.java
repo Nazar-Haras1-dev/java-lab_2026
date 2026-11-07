@@ -1,5 +1,7 @@
 package com.example.library.service;
-
+import com.example.library.aop.Audited;
+import com.example.library.aop.RateLimited;
+import com.example.library.aop.Retry;
 import com.example.library.dto.BookDto;
 import com.example.library.entity.Book;
 import com.example.library.exception.DuplicateResourceException;
@@ -24,10 +26,12 @@ public class BookService {
         this.mapper = mapper;
     }
 
+    @Retry(maxAttempts = 3)
     public List<BookDto> findAll() {
         return repository.findAll().stream().map(mapper::toDto).toList();
     }
 
+    @Retry(maxAttempts = 3)
     public BookDto findById(Long id) {
         return mapper.toDto(getEntity(id));
     }
@@ -35,7 +39,8 @@ public class BookService {
     public long count() {
         return repository.count();
     }
-
+    @RateLimited(maxCalls = 10, perSeconds = 60)
+    @Audited(action = "CREATE_BOOK")
     @Transactional
     public BookDto create(BookDto dto) {
         if (repository.existsByIsbn(dto.getIsbn())) {
@@ -44,6 +49,7 @@ public class BookService {
         return mapper.toDto(repository.save(mapper.toEntity(dto)));
     }
 
+    @Audited(action = "UPDATE_BOOK")
     @Transactional
     public BookDto update(Long id, BookDto dto) {
         Book book = getEntity(id);
@@ -55,6 +61,7 @@ public class BookService {
     }
 
     // Обмеження доступу на рівні методу: видаляти може тільки ADMIN
+    @Audited(action = "DELETE_BOOK")
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
     public void delete(Long id) {

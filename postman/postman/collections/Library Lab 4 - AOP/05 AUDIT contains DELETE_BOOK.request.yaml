@@ -1,0 +1,8 @@
+$kind: http-request
+url: "{{baseUrl}}/api/admin/aop-demo/audit"
+method: GET
+scripts:
+  - type: afterResponse
+    code: pm.test('delete audited', () => pm.expect(pm.response.json().some(e => e.action === 'DELETE_BOOK')).to.be.true);
+    language: text/javascript
+order: 5000

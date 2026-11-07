@@ -1,0 +1,11 @@
+$kind: http-request
+name: 12 RATE-LIMITED call 4 -> 429
+url: "{{baseUrl}}/api/admin/aop-demo/rate-limited"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('429 Too Many Requests', () => pm.response.to.have.status(429));
+      pm.test('message from aspect', () => pm.expect(pm.response.json().detail).to.include('Rate limit exceeded'));
+    language: text/javascript
+order: 12000

@@ -76,4 +76,16 @@ class RestExceptionHandlerTest {
         assertThat(result.getStatus()).isEqualTo(403);
         assertThat(result.getDetail()).contains("@PreAuthorize");
     }
+    @Test
+    void handleRateLimit_rateLimitExceeded_returns429WithMessage() {
+        // Arrange
+        RateLimitExceededException ex = new RateLimitExceededException("Rate limit exceeded");
+
+        // Act
+        ProblemDetail result = handler.handleRateLimit(ex);
+
+        // Assert
+        assertThat(result.getStatus()).isEqualTo(429);
+        assertThat(result.getDetail()).isEqualTo("Rate limit exceeded");
+    }
 }
