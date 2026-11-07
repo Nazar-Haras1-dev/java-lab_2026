@@ -1,6 +1,7 @@
 package com.example.library.dto;
 
 import jakarta.validation.constraints.*;
+import com.example.library.validation.ValidIsbn;
 
 public class BookDto {
 
@@ -16,6 +17,7 @@ public class BookDto {
 
     @NotBlank(message = "ISBN is required")
     @Size(max = 20)
+    @ValidIsbn
     private String isbn;
 
     @Min(value = 1000, message = "Year must be >= 1000")

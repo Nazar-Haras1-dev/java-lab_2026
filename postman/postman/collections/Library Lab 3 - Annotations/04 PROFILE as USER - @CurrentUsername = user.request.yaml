@@ -1,0 +1,15 @@
+$kind: http-request
+name: 04 PROFILE as USER -> @CurrentUsername = user
+url: "{{baseUrl}}/api/profile"
+method: GET
+auth:
+  type: bearer
+  credentials:
+    token: "{{userToken}}"
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('200', () => pm.response.to.have.status(200));
+      pm.test('username resolved from token', () => pm.expect(pm.response.json().username).to.eql('user'));
+    language: text/javascript
+order: 4000

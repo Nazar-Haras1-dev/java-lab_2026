@@ -1,0 +1,9 @@
+$kind: http-request
+name: 10 DELETE again -> 404
+url: "{{baseUrl}}/api/books/{{bookId}}"
+method: DELETE
+scripts:
+  - type: afterResponse
+    code: pm.test('404', () => pm.response.to.have.status(404));
+    language: text/javascript
+order: 10000

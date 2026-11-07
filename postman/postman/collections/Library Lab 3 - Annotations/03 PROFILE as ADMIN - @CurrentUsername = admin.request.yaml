@@ -1,0 +1,11 @@
+$kind: http-request
+name: 03 PROFILE as ADMIN -> @CurrentUsername = admin
+url: "{{baseUrl}}/api/profile"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('200', () => pm.response.to.have.status(200));
+      pm.test('username resolved from token', () => pm.expect(pm.response.json().username).to.eql('admin'));
+    language: text/javascript
+order: 3000

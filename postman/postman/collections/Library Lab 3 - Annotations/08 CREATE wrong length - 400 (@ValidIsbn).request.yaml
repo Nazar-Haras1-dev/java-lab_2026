@@ -1,0 +1,22 @@
+$kind: http-request
+name: 08 CREATE wrong length -> 400 (@ValidIsbn)
+url: "{{baseUrl}}/api/books"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "title": "Clean Code",
+      "author": "Robert Martin",
+      "isbn": "12345",
+      "publishedYear": 2008
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('400', () => pm.response.to.have.status(400));
+      pm.test('message mentions length', () => pm.expect(pm.response.json().detail).to.include('10 or 13'));
+    language: text/javascript
+order: 8000

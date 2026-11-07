@@ -1,0 +1,11 @@
+$kind: http-request
+name: 05 PROFILE no token -> 401
+url: "{{baseUrl}}/api/profile"
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    code: pm.test('401', () => pm.response.to.have.status(401));
+    language: text/javascript
+order: 5000
