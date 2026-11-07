@@ -1,5 +1,5 @@
 package com.example.library.controller;
-
+import com.example.library.annotation.DeleteNoContent;
 import com.example.library.dto.BookDto;
 import com.example.library.service.BookService;
 import jakarta.validation.Valid;
@@ -40,9 +40,8 @@ public class BookRestController {
         return service.update(id, dto);
     }
 
-    @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable Long id) {
+    @DeleteNoContent("/{id}")
+    public void delete(@PathVariable Long id) {
         service.delete(id);          // тут спрацьовує @PreAuthorize
-        return ResponseEntity.noContent().build();
     }
 }

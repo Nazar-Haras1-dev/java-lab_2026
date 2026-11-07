@@ -1,0 +1,24 @@
+$kind: collection
+description: ""
+variables:
+  baseUrl: http://localhost:8080
+  keycloakUrl: http://localhost:8180
+  adminToken: ""
+  userToken: ""
+  bookId: ""
+  isbn13: ""
+scripts:
+  - type: http:beforeRequest
+    code: |-
+      const d = [9,7,8];
+      for (let i = 0; i < 9; i++) { d.push(Math.floor(Math.random() * 10)); }
+      const sum = d.reduce((s, x, i) => s + x * (i % 2 === 0 ? 1 : 3), 0);
+      const check = (10 - (sum % 10)) % 10;
+      pm.collectionVariables.set('isbn13', d.join('') + check);
+    language: text/javascript
+auth:
+  - id: 1b8e580f-de41-4cd4-a8f4-8fd3a361fb86
+    type: bearer
+    name: bearer auth
+    credentials:
+      token: "{{adminToken}}"

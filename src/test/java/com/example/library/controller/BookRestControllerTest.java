@@ -140,14 +140,12 @@ class BookRestControllerTest {
     }
 
     @Test
-    void delete_existingId_callsServiceAndReturns204() {
+    void delete_existingId_callsService() {
         // Act
-        ResponseEntity<Void> response = controller.delete(5L);
+        controller.delete(5L);
 
         // Assert
         verify(service).delete(5L);
-        assertThat(response.getStatusCode().value()).isEqualTo(204);
-        assertThat(response.getBody()).isNull();
     }
 
     @Test

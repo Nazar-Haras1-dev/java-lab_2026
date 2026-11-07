@@ -1,0 +1,22 @@
+$kind: http-request
+name: 07 CREATE wrong check digit -> 400 (@ValidIsbn)
+url: "{{baseUrl}}/api/books"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "title": "Clean Code",
+      "author": "Robert Martin",
+      "isbn": "9780132350885",
+      "publishedYear": 2008
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('400', () => pm.response.to.have.status(400));
+      pm.test('message explains check digit', () => pm.expect(pm.response.json().detail).to.include('check digit'));
+    language: text/javascript
+order: 7000

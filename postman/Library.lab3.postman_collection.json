@@ -1,0 +1,116 @@
+{
+  "info": { "name": "Library Lab 3 - Annotations", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+  "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+  "event": [{ "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+    "const d = [9,7,8];",
+    "for (let i = 0; i < 9; i++) { d.push(Math.floor(Math.random() * 10)); }",
+    "const sum = d.reduce((s, x, i) => s + x * (i % 2 === 0 ? 1 : 3), 0);",
+    "const check = (10 - (sum % 10)) % 10;",
+    "pm.collectionVariables.set('isbn13', d.join('') + check);"
+  ]}}],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "keycloakUrl", "value": "http://localhost:8180" },
+    { "key": "adminToken", "value": "" },
+    { "key": "userToken", "value": "" },
+    { "key": "bookId", "value": "" },
+    { "key": "isbn13", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 Get ADMIN token",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('200', () => pm.response.to.have.status(200));",
+        "pm.collectionVariables.set('adminToken', pm.response.json().access_token);"
+      ]}}],
+      "request": { "method": "POST", "auth": { "type": "noauth" }, "header": [],
+        "body": { "mode": "urlencoded", "urlencoded": [
+          { "key": "grant_type", "value": "password" }, { "key": "client_id", "value": "library-app" },
+          { "key": "client_secret", "value": "library-secret" }, { "key": "username", "value": "admin" },
+          { "key": "password", "value": "admin" } ] },
+        "url": "{{keycloakUrl}}/realms/library/protocol/openid-connect/token" }
+    },
+    {
+      "name": "02 Get USER token",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('200', () => pm.response.to.have.status(200));",
+        "pm.collectionVariables.set('userToken', pm.response.json().access_token);"
+      ]}}],
+      "request": { "method": "POST", "auth": { "type": "noauth" }, "header": [],
+        "body": { "mode": "urlencoded", "urlencoded": [
+          { "key": "grant_type", "value": "password" }, { "key": "client_id", "value": "library-app" },
+          { "key": "client_secret", "value": "library-secret" }, { "key": "username", "value": "user" },
+          { "key": "password", "value": "user" } ] },
+        "url": "{{keycloakUrl}}/realms/library/protocol/openid-connect/token" }
+    },
+    {
+      "name": "03 PROFILE as ADMIN -> @CurrentUsername = admin",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('200', () => pm.response.to.have.status(200));",
+        "pm.test('username resolved from token', () => pm.expect(pm.response.json().username).to.eql('admin'));"
+      ]}}],
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/profile" }
+    },
+    {
+      "name": "04 PROFILE as USER -> @CurrentUsername = user",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('200', () => pm.response.to.have.status(200));",
+        "pm.test('username resolved from token', () => pm.expect(pm.response.json().username).to.eql('user'));"
+      ]}}],
+      "request": { "method": "GET", "header": [],
+        "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+        "url": "{{baseUrl}}/api/profile" }
+    },
+    {
+      "name": "05 PROFILE no token -> 401",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('401', () => pm.response.to.have.status(401));"
+      ]}}],
+      "request": { "method": "GET", "header": [], "auth": { "type": "noauth" }, "url": "{{baseUrl}}/api/profile" }
+    },
+    {
+      "name": "06 CREATE book valid ISBN-13 -> 201",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('201', () => pm.response.to.have.status(201));",
+        "pm.collectionVariables.set('bookId', pm.response.json().id);"
+      ]}}],
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"title\": \"Clean Code\",\n  \"author\": \"Robert Martin\",\n  \"isbn\": \"{{isbn13}}\",\n  \"publishedYear\": 2008\n}" },
+        "url": "{{baseUrl}}/api/books" }
+    },
+    {
+      "name": "07 CREATE wrong check digit -> 400 (@ValidIsbn)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('400', () => pm.response.to.have.status(400));",
+        "pm.test('message explains check digit', () => pm.expect(pm.response.json().detail).to.include('check digit'));"
+      ]}}],
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"title\": \"Clean Code\",\n  \"author\": \"Robert Martin\",\n  \"isbn\": \"9780132350885\",\n  \"publishedYear\": 2008\n}" },
+        "url": "{{baseUrl}}/api/books" }
+    },
+    {
+      "name": "08 CREATE wrong length -> 400 (@ValidIsbn)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('400', () => pm.response.to.have.status(400));",
+        "pm.test('message mentions length', () => pm.expect(pm.response.json().detail).to.include('10 or 13'));"
+      ]}}],
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"title\": \"Clean Code\",\n  \"author\": \"Robert Martin\",\n  \"isbn\": \"12345\",\n  \"publishedYear\": 2008\n}" },
+        "url": "{{baseUrl}}/api/books" }
+    },
+    {
+      "name": "09 DELETE book (@DeleteNoContent) -> 204",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+      ]}}],
+      "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/api/books/{{bookId}}" }
+    },
+    {
+      "name": "10 DELETE again -> 404",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('404', () => pm.response.to.have.status(404));"
+      ]}}],
+      "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/api/books/{{bookId}}" }
+    }
+  ]
+}
