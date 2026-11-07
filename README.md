@@ -142,7 +142,7 @@ BookServiceTest
 | AC1 | тест для звичайних даних із реальним assert | тести «щасливого шляху» в кожному методі `BookService`, кожен має `assertThat` над результатом |
 | AC2 | тест для невалідних, граничних даних, відмови | `missingId`, `duplicateIsbn`, `noBooks`, `count = 0`: перевіряються тип і текст винятку |
 | AC3 | залежності через `@Mock`/`@InjectMocks`, без Spring | `@ExtendWith(MockitoExtension.class)`, немає `@SpringBootTest` |
-| AC4 | навмисно зламати логіку, тест падає, повернути назад | див. розділ 7 |
+| AC4 | навмисно зламати логіку, тест падає, повернути назад |  |
 | AC5 | без БД, мережі, файлів, `Thread.sleep`, незалежність від порядку | лише об'єкти в пам'яті, кожен тест створює власні дані |
 | AC6 | імена тестів і Arrange-Act-Assert | формат `метод_сценарій_результат` і коментарі `// Arrange`, `// Act`, `// Assert` |
 | AC7 | `verify` / `ArgumentCaptor` для побічних ефектів | `verify(repository).save(...)` із `ArgumentCaptor<Book>`, `verify(mapper).updateEntity(...)`, `verify(repository).delete(...)`, `verify(..., never())` у негативних сценаріях |
