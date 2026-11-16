@@ -88,4 +88,18 @@ class RestExceptionHandlerTest {
         assertThat(result.getStatus()).isEqualTo(429);
         assertThat(result.getDetail()).isEqualTo("Rate limit exceeded");
     }
+
+    @Test
+    void handleTaskRejected_executorSaturated_returns503WithRetryAfterHeader() {
+        // Arrange
+        org.springframework.core.task.TaskRejectedException ex = new org.springframework.core.task.TaskRejectedException("pool is full");
+
+        // Act
+        org.springframework.http.ResponseEntity<ProblemDetail> result = handler.handleTaskRejected(ex);
+
+        // Assert
+        assertThat(result.getStatusCode().value()).isEqualTo(503);
+        assertThat(result.getHeaders().getFirst("Retry-After")).isEqualTo("5");
+        assertThat(result.getBody().getDetail()).isEqualTo("Server is busy, please try again later");
+    }
 }
