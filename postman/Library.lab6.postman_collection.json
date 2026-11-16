@@ -1,0 +1,321 @@
+{
+  "info": {
+    "name": "Library Lab 6 - Quartz",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{adminToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "keycloakUrl",
+      "value": "http://localhost:8180"
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "userToken",
+      "value": ""
+    },
+    {
+      "key": "snapshotCount",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Get ADMIN token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('adminToken', pm.response.json().access_token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "password"
+            },
+            {
+              "key": "client_id",
+              "value": "library-app"
+            },
+            {
+              "key": "client_secret",
+              "value": "library-secret"
+            },
+            {
+              "key": "username",
+              "value": "admin"
+            },
+            {
+              "key": "password",
+              "value": "admin"
+            }
+          ]
+        },
+        "url": "{{keycloakUrl}}/realms/library/protocol/openid-connect/token"
+      }
+    },
+    {
+      "name": "02 Get USER token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('userToken', pm.response.json().access_token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "password"
+            },
+            {
+              "key": "client_id",
+              "value": "library-app"
+            },
+            {
+              "key": "client_secret",
+              "value": "library-secret"
+            },
+            {
+              "key": "username",
+              "value": "user"
+            },
+            {
+              "key": "password",
+              "value": "user"
+            }
+          ]
+        },
+        "url": "{{keycloakUrl}}/realms/library/protocol/openid-connect/token"
+      }
+    },
+    {
+      "name": "03 JOBS: declared in one place, persisted in DB, names/groups/misfire/time zone",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const jobs = pm.response.json();",
+              "const snap = jobs.find(j => j.name === 'catalog-snapshot');",
+              "const ret = jobs.find(j => j.name === 'snapshot-retention');",
+              "pm.test('both jobs exist in group library-maintenance', () => { pm.expect(snap.group).to.eql('library-maintenance'); pm.expect(ret.group).to.eql('library-maintenance'); });",
+              "pm.test('snapshot job has TWO triggers', () => pm.expect(snap.triggers.length).to.eql(2));",
+              "pm.test('retention job has one trigger', () => pm.expect(ret.triggers.length).to.eql(1));",
+              "pm.test('concurrent execution disallowed', () => { pm.expect(snap.concurrentDisallowed).to.eql(true); pm.expect(ret.concurrentDisallowed).to.eql(true); });",
+              "const daily = snap.triggers.find(t => t.name === 'catalog-snapshot-daily');",
+              "const catchUp = snap.triggers.find(t => t.name === 'catalog-snapshot-catchup');",
+              "const weekly = ret.triggers[0];",
+              "pm.test('cron triggers have explicit time zone', () => { pm.expect(daily.timeZone).to.eql('Europe/Kyiv'); pm.expect(weekly.timeZone).to.eql('Europe/Kyiv'); });",
+              "pm.test('misfire instructions: FIRE_ONCE_NOW=1, RESCHEDULE_NEXT_WITH_REMAINING_COUNT=4, DO_NOTHING=2', () => { pm.expect(daily.misfireInstruction).to.eql(1); pm.expect(catchUp.misfireInstruction).to.eql(4); pm.expect(weekly.misfireInstruction).to.eql(2); });",
+              "pm.test('trigger overrides job data', () => { pm.expect(snap.data.source).to.eql('daily'); pm.expect(catchUp.data.source).to.eql('catch-up'); pm.expect(weekly.data.retentionDays).to.eql(180); pm.expect(ret.data.retentionDays).to.eql(90); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/quartz/jobs"
+      }
+    },
+    {
+      "name": "04 RUN snapshot manually -> 202",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('202', () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/quartz/jobs/catalog-snapshot/run?source=manual"
+      }
+    },
+    {
+      "name": "05 SNAPSHOTS: one snapshot per date",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// чекаємо, поки Quartz виконає завдання у своєму потоці",
+              "setTimeout(function () {}, 1500);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const list = pm.response.json();",
+              "pm.test('at least one snapshot exists', () => pm.expect(list.length).to.be.above(0));",
+              "pm.test('dates are unique (idempotent)', () => { const dates = list.map(s => s.snapshotDate); pm.expect(new Set(dates).size).to.eql(dates.length); });",
+              "pm.collectionVariables.set('snapshotCount', list.length);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/quartz/snapshots"
+      }
+    },
+    {
+      "name": "06 RUN snapshot again (same day) -> 202",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('202', () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/quartz/jobs/catalog-snapshot/run?source=manual-2"
+      }
+    },
+    {
+      "name": "07 SNAPSHOTS: second run changed nothing",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// чекаємо, поки Quartz виконає завдання у своєму потоці",
+              "setTimeout(function () {}, 1500);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('count unchanged after second run', () => pm.expect(pm.response.json().length).to.eql(parseInt(pm.collectionVariables.get('snapshotCount'))));",
+              "pm.test('no snapshot was created by manual-2', () => pm.expect(pm.response.json().some(s => s.source === 'manual-2')).to.eql(false));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/quartz/snapshots"
+      }
+    },
+    {
+      "name": "08 USER jobs -> 403",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/quartz/jobs",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{userToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "09 jobs no token -> 401",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/quartz/jobs",
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    }
+  ]
+}
