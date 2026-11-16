@@ -1,0 +1,31 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: scheduler-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/library
+    username: library
+    password: library
+  jpa:
+    hibernate:
+      ddl-auto: validate      # Hibernate лише ПЕРЕВІРЯЄ схему, створює її Liquibase
+    open-in-view: false
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+  quartz:
+    job-store-type: jdbc
+    jdbc:
+      initialize-schema: never          # таблиці QRTZ_* створює Liquibase (changeset 002), а не Spring Boot
+    overwrite-existing-jobs: true       # нова версія застосунку оновлює визначення, не дублюючи завдань
+    wait-for-jobs-to-complete-on-shutdown: true
+    properties:
+      org.quartz.scheduler.instanceName: library-scheduler
+      org.quartz.threadPool.threadCount: 3
+      org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.PostgreSQLDelegate
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8180/realms/library

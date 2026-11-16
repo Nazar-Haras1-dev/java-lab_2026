@@ -19,6 +19,10 @@
       "value": "http://localhost:8080"
     },
     {
+      "key": "schedulerUrl",
+      "value": "http://localhost:8081"
+    },
+    {
       "key": "keycloakUrl",
       "value": "http://localhost:8180"
     },
@@ -161,7 +165,7 @@
       "request": {
         "method": "GET",
         "header": [],
-        "url": "{{baseUrl}}/api/admin/quartz/jobs"
+        "url": "{{schedulerUrl}}/api/admin/quartz/jobs"
       }
     },
     {
@@ -180,7 +184,7 @@
       "request": {
         "method": "POST",
         "header": [],
-        "url": "{{baseUrl}}/api/admin/quartz/jobs/catalog-snapshot/run?source=manual"
+        "url": "{{schedulerUrl}}/api/admin/quartz/jobs/catalog-snapshot/run?source=manual"
       }
     },
     {
@@ -213,7 +217,7 @@
       "request": {
         "method": "GET",
         "header": [],
-        "url": "{{baseUrl}}/api/admin/quartz/snapshots"
+        "url": "{{schedulerUrl}}/api/admin/quartz/snapshots"
       }
     },
     {
@@ -232,7 +236,7 @@
       "request": {
         "method": "POST",
         "header": [],
-        "url": "{{baseUrl}}/api/admin/quartz/jobs/catalog-snapshot/run?source=manual-2"
+        "url": "{{schedulerUrl}}/api/admin/quartz/jobs/catalog-snapshot/run?source=manual-2"
       }
     },
     {
@@ -263,7 +267,7 @@
       "request": {
         "method": "GET",
         "header": [],
-        "url": "{{baseUrl}}/api/admin/quartz/snapshots"
+        "url": "{{schedulerUrl}}/api/admin/quartz/snapshots"
       }
     },
     {
@@ -282,7 +286,7 @@
       "request": {
         "method": "GET",
         "header": [],
-        "url": "{{baseUrl}}/api/admin/quartz/jobs",
+        "url": "{{schedulerUrl}}/api/admin/quartz/jobs",
         "auth": {
           "type": "bearer",
           "bearer": [
@@ -311,7 +315,7 @@
       "request": {
         "method": "GET",
         "header": [],
-        "url": "{{baseUrl}}/api/admin/quartz/jobs",
+        "url": "{{schedulerUrl}}/api/admin/quartz/jobs",
         "auth": {
           "type": "noauth"
         }
