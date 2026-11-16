@@ -1,0 +1,5 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/changes/002-create-quartz-tables.yaml
+  - include:
+      file: db/changelog/changes/003-create-catalog-snapshots-table.yaml
