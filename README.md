@@ -284,7 +284,7 @@ mvn clean test          # очікується: Tests run: 88 (73 + 15), Failure
 - Retry не має затримки між спробами (спрощення для детермінованих тестів).
 
 
----
+***
 
 # Lab 5: Асинхронна обробка (`@Async`, `CompletableFuture`)
 
@@ -399,7 +399,7 @@ mvn clean test        # очікується: Tests run: 121, Failures: 0, BUILD
 - Відхилений лист не повторюється (рішення «пропустити й залогувати»).
 
 
----
+***
 
 # Lab 6: Quartz Scheduler (JDBC job store, Liquibase)
 
@@ -502,7 +502,7 @@ select cron_expression, time_zone_id from qrtz_cron_triggers;
 - Єдиний `Clock` проєкту (UTC з `AopConfig`) не змінювався; київська зона застосовується тільки в `CatalogSnapshotService`.
 
 
----
+***
 
 # Lab 7: Multi-module Maven (розділення на сервіси)
 
