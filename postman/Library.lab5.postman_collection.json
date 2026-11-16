@@ -1,0 +1,338 @@
+{
+  "info": {
+    "name": "Library Lab 5 - Async",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{adminToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const d = [9,7,8];",
+          "for (let i = 0; i < 9; i++) { d.push(Math.floor(Math.random() * 10)); }",
+          "const sum = d.reduce((s, x, i) => s + x * (i % 2 === 0 ? 1 : 3), 0);",
+          "const check = (10 - (sum % 10)) % 10;",
+          "pm.collectionVariables.set('isbn13', d.join('') + check);"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "keycloakUrl",
+      "value": "http://localhost:8180"
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "userToken",
+      "value": ""
+    },
+    {
+      "key": "bookId",
+      "value": ""
+    },
+    {
+      "key": "isbn13",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Get ADMIN token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('adminToken', pm.response.json().access_token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "password"
+            },
+            {
+              "key": "client_id",
+              "value": "library-app"
+            },
+            {
+              "key": "client_secret",
+              "value": "library-secret"
+            },
+            {
+              "key": "username",
+              "value": "admin"
+            },
+            {
+              "key": "password",
+              "value": "admin"
+            }
+          ]
+        },
+        "url": "{{keycloakUrl}}/realms/library/protocol/openid-connect/token"
+      }
+    },
+    {
+      "name": "02 Get USER token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('userToken', pm.response.json().access_token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "auth": {
+          "type": "noauth"
+        },
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "password"
+            },
+            {
+              "key": "client_id",
+              "value": "library-app"
+            },
+            {
+              "key": "client_secret",
+              "value": "library-secret"
+            },
+            {
+              "key": "username",
+              "value": "user"
+            },
+            {
+              "key": "password",
+              "value": "user"
+            }
+          ]
+        },
+        "url": "{{keycloakUrl}}/realms/library/protocol/openid-connect/token"
+      }
+    },
+    {
+      "name": "03 CREATE book -> 201 fast (email is fire-and-forget)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201', () => pm.response.to.have.status(201));",
+              "pm.test('did not wait for the ~1s email (< 900 ms)', () => pm.expect(pm.response.responseTime).to.be.below(900));",
+              "pm.collectionVariables.set('bookId', pm.response.json().id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/books",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"title\":\"Async Book\",\"author\":\"Lab Five\",\"isbn\":\"{{isbn13}}\",\"publishedYear\":2020}"
+        }
+      }
+    },
+    {
+      "name": "04 REPORT: two parallel slow calls -> 200, ~1s not ~2s",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const b = pm.response.json();",
+              "pm.test('not degraded', () => pm.expect(b.degraded).to.eql(false));",
+              "pm.test('publisher from async call', () => pm.expect(b.publisher).to.match(/^Publisher-/));",
+              "pm.test('pdf from async call', () => pm.expect(b.pdfBytes).to.be.above(0));",
+              "pm.test('parallel: < 1900 ms (sequential would be >= 2000 ms)', () => pm.expect(pm.response.responseTime).to.be.below(1900));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/books/{{bookId}}/report"
+      }
+    },
+    {
+      "name": "05 REPORT unknown book -> 404",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('404', () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/books/999999/report"
+      }
+    },
+    {
+      "name": "06 REPORT no token -> 401",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/books/{{bookId}}/report",
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "07 ADMIN fail-email -> 202 (caller does not fail)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('202', () => pm.response.to.have.status(202));",
+              "pm.test('started', () => pm.expect(pm.response.json().status).to.eql('started'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/async-demo/fail-email"
+      }
+    },
+    {
+      "name": "08 ADMIN errors -> AsyncUncaughtExceptionHandler recorded failure",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('error recorded', () => pm.expect(pm.response.json().some(e => e.method === 'EmailSender.sendBookCreatedEmail' && e.exception === 'IllegalArgumentException')).to.eql(true));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/async-demo/errors"
+      }
+    },
+    {
+      "name": "09 USER errors -> 403",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/admin/async-demo/errors",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{userToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "10 CLEANUP delete book -> 204",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('204', () => pm.response.to.have.status(204));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": "{{baseUrl}}/api/books/{{bookId}}"
+      }
+    }
+  ]
+}

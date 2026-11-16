@@ -1,5 +1,6 @@
 package com.example.library.service;
 
+import com.example.library.async.EmailSender;
 import com.example.library.dto.BookDto;
 import com.example.library.entity.Book;
 import com.example.library.exception.DuplicateResourceException;
@@ -12,6 +13,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.task.TaskRejectedException;
 
 import java.util.List;
 import java.util.Optional;
@@ -21,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -33,6 +36,8 @@ class BookServiceTest {
     private BookRepository repository;
     @Mock
     private BookMapper mapper;
+    @Mock
+    private EmailSender emailSender;
     @InjectMocks
     private BookService service;
 
@@ -181,6 +186,45 @@ class BookServiceTest {
                 .hasMessage("Book with ISBN 111 already exists");
         verify(repository, never()).save(any());
         verifyNoInteractions(mapper);
+        verifyNoInteractions(emailSender);
+    }
+
+    @Test
+    void create_newIsbn_sendsCreatedEmailFireAndForget() {
+        // Arrange
+        BookDto input = dto(null, "111");
+        Book entity = book(null, "111");
+        Book saved = book(10L, "111");
+        BookDto output = dto(10L, "111");
+        when(mapper.toEntity(input)).thenReturn(entity);
+        when(repository.save(entity)).thenReturn(saved);
+        when(mapper.toDto(saved)).thenReturn(output);
+
+        // Act
+        service.create(input);
+
+        // Assert
+        verify(emailSender).sendBookCreatedEmail("Clean Code", "111");
+    }
+
+    @Test
+    void create_executorSaturated_stillReturnsSavedBookWithoutError() {
+        // Arrange
+        BookDto input = dto(null, "111");
+        Book entity = book(null, "111");
+        Book saved = book(10L, "111");
+        BookDto output = dto(10L, "111");
+        when(mapper.toEntity(input)).thenReturn(entity);
+        when(repository.save(entity)).thenReturn(saved);
+        when(mapper.toDto(saved)).thenReturn(output);
+        doThrow(new TaskRejectedException("pool is full")).when(emailSender).sendBookCreatedEmail(any(), any());
+
+        // Act
+        BookDto result = service.create(input);
+
+        // Assert
+        assertThat(result).isSameAs(output);
+        verify(repository).save(entity);
     }
 
     // ---------- update ----------
