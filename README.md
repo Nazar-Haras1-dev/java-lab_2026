@@ -284,7 +284,7 @@ mvn clean test          # очікується: Tests run: 88 (73 + 15), Failure
 - Retry не має затримки між спробами (спрощення для детермінованих тестів).
 
 
----
+***
 
 # Lab 5: Асинхронна обробка (`@Async`, `CompletableFuture`)
 
@@ -399,7 +399,7 @@ mvn clean test        # очікується: Tests run: 121, Failures: 0, BUILD
 - Відхилений лист не повторюється (рішення «пропустити й залогувати»).
 
 
----
+***
 
 # Lab 6: Quartz Scheduler (JDBC job store, Liquibase)
 
