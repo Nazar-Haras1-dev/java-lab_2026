@@ -1,284 +1,166 @@
----
-
-# Lab 4: AOP (власні анотації та аспекти)
+# Lab 6: Quartz Scheduler (JDBC job store, Liquibase)
 
 ## 1. Мета і що зроблено
-## Як працює код і за що відповідає (коротко)
-## 2. Що таке AOP і як воно працює в проєкті
 
-AOP виносить наскрізну логіку з бізнес-коду в окремі **аспекти**. Замість копіювання коду в методи їх позначають анотацією.
+Регулярні завдання виконуються за розкладом, який **зберігається в PostgreSQL** і переживає перезапуск; нова версія застосунку не скасовує й не дублює завдання.
 
-- **Aspect** (`@Aspect`): клас із наскрізною логікою.
-- **Pointcut** (`@annotation(audited)`): вираз, що вибирає методи з нашою анотацією.
-- **Advice**: код, який виконується (`@AfterReturning` після успіху, `@Around` навколо виклику).
-- **JoinPoint / ProceedingJoinPoint**: опис виклику методу. У `@Around` виклик `proceed()` запускає оригінальний метод.
+Трактування (де завдання неоднозначне):
+- У проєкті немає замовлень, тому «рутинні задачі» обрано з предметної області Library: **щоденний знімок каталогу** (скільки книг у бібліотеці, таблиця `catalog_snapshots`) і **очищення старих знімків**.
+- Завдання з двома тригерами: знімок каталогу (щоденний cron + страхувальний simple-тригер «кожні 6 годин і при старті»).
+- Стратегія збою: **фіксація помилки й очікування наступного запланованого запуску** (`JobExecutionException(e, false)`), без повторів і без нескінченного циклу.
+- Невідомий/відсутній параметр: ключа немає -> документоване значення за замовчуванням; значення неправильного типу/формату -> явний виняток (завдання не виконується).
+- Для ідемпотентності тест рівня сервісу з Mockito (без БД); справжню БД перевірено живим запуском і Postman.
+- `Clock` береться із існуючого `AopConfig` (UTC) і переводиться в `Europe/Kyiv` усередині сервісу, щоб дата знімка збігалась з часовим поясом cron.
 
-Spring AOP працює через **проксі**: бін обгортається об'єктом-посередником (CGLIB-підклас). Виклик ззовні потрапляє в проксі, який виконує advice, а потім оригінальний метод
-AuditAspect (@AfterReturning): після успішного виконання бере користувача з SecurityContextHolder, формує AuditEntry, пише в AuditTrail і в лог AUDIT. Якщо метод кинув виняток (наприклад, @PreAuthorize заборонив видалення), аудиту немає.
-RateLimitAspect (@Around): ключ це користувач плюс метод. Тримає чергу часу викликів у ковзному вікні. Якщо їх уже maxCalls, кидає виняток без виклику proceed() (429). Час береться з Clock, тому тести детерміновані.
-RetryAspect (@Around): у циклі викликає proceed(). Повторює лише для винятків зі списку retryOn (за замовчуванням тимчасові помилки БД), для інших одразу кидає. Якщо спроби вичерпано, кидає останній виняток.
+## 2. Нові та змінені файли
 
-Порядок аспектів (@Order): Retry (1), RateLimit (2), Audit (3). Вони виконуються до безпеки та транзакцій (їхні порядки більші), тому кожна спроба повтору отримує нову транзакцію, а @PreAuthorize усередині аспектів.
+| Файл | Призначення | Що змінилось |
+|---|---|---|
+| `pom.xml` | залежність `spring-boot-starter-quartz` | змінено |
+| `resources/application.yml` | `spring.quartz.*` (jdbc, `initialize-schema: never`, `overwrite-existing-jobs`, PostgreSQL delegate) | змінено |
+| `db/changelog/db.changelog-master.yaml` | підключення двох нових changeset | змінено |
+| `db/changelog/changes/002-create-quartz-tables.yaml` + `002-quartz-tables.sql` | 11 таблиць `QRTZ_*` (офіційний скрипт Quartz 2.3.2 для PostgreSQL, без DROP) + rollback | нове |
+| `db/changelog/changes/003-create-catalog-snapshots-table.yaml` | таблиця `catalog_snapshots`, `snapshot_date` UNIQUE | нове |
+| `library/scheduling/CatalogSnapshot.java`, `CatalogSnapshotRepository.java` | сутність і репозиторій знімків | нове |
+| `library/scheduling/CatalogSnapshotService.java` | уся логіка: `takeSnapshot`, `purgeOlderThan`, `findAll` | нове |
+| `library/scheduling/JobParams.java` | читання параметрів: default або явний виняток | нове |
+| `library/scheduling/CatalogSnapshotJob.java`, `SnapshotRetentionJob.java` | два легкі завдання | нове |
+| `library/scheduling/QuartzConfig.java` | `JobDetail` + `Trigger` бінів в одному `@Configuration` | нове |
+| `controller/QuartzAdminController.java` | ADMIN: `GET /api/admin/quartz/jobs`, `POST .../jobs/catalog-snapshot/run`, `GET .../snapshots` | нове |
+| `test/.../scheduling/*`, `QuartzAdminControllerTest` | нові тести | нове |
+| `postman/Library.lab6.postman_collection.json` | 9 запитів з тестами | нове |
 
-Чому повтор лише для читання. Повтор безпечний для ідемпотентних операцій. Повторне створення могло б дублювати дані.
+## 3. Як працює код і за що відповідає (простими словами)
 
-Self-invocation.
+1. `QuartzConfig` в одному місці оголошує 2 `JobDetail` і 3 `Trigger`. Кожен тригер вказує на завдання через `JobKey`, усі мають імʼя та групу `library-maintenance`.
+2. Liquibase (changeset 002) створює таблиці `QRTZ_*`; Spring Boot налаштований `initialize-schema: never`, тобто сам таблиць не створює. `job-store-type: jdbc` кладе розклад у БД.
+3. Тригер у момент запуску **перекриває** значення `JobDataMap` завдання: `catch-up` замість `daily`, `180` днів замість `90`. Решта ключів лишається за замовчуванням.
+4. `CatalogSnapshotJob` і `SnapshotRetentionJob` «легкі»: читають параметри й **один раз** викликають `CatalogSnapshotService`. Транзакція проходить на рівні методу сервісу.
+5. `@DisallowConcurrentExecution`: наступний запуск чекає завершення попереднього.
+6. Сервіс ідемпотентний: другий запуск за ту саму дату нічого не змінює (унікальний ключ `snapshot_date` + перевірка).
 
-Виклик this.auditedAction() усередині того ж класу йде безпосередньо до об'єкта, повз проксі, тож аспект не спрацьовує, і жодних помилок немає.
-Це обмеження проксі-моделі Spring AOP.
-Обхід: винести метод в інший бін, інжектити самого себе, або використати AspectJ weaving (змінює байт-код на компіляції чи завантаженні).
-Тут це зроблено свідомо: Postman 07 і SelfInvocationTest демонструють різницю між двома способами виклику.
+## 4. Детальний опис кожного класу й методу
 
-Unit-тест аспекта. ProceedingJoinPoint замінено моком, Spring і @SpringBootTest не потрібні. Перевіряється рішення в advice: чи викликається proceed() (і скільки разів), що кидається і що повертається
-**Ідея AOP.** Деякі речі потрібні багатьом методам (записати подію, обмежити частоту, повторити при збої). Замість копіювання коду в кожен метод ми пишемо це один раз в аспекті, а методи позначаємо анотацією.
+- **`QuartzConfig`**: `catalogSnapshotJobDetail` (дефолти `source=daily`, `triggeredBy=scheduler`), `catalogSnapshotDailyTrigger` (cron `0 0 2 * * ?`, `Europe/Kyiv`, misfire `FIRE_ONCE_NOW`), `catalogSnapshotCatchUpTrigger` (кожні 6 годин, `startNow`, `source=catch-up`, misfire `RESCHEDULE_NEXT_WITH_REMAINING_COUNT`), `snapshotRetentionJobDetail` (`retentionDays=90`), `snapshotRetentionWeeklyTrigger` (неділя 03:00 Kyiv, `retentionDays=180`, misfire `DO_NOTHING`).
+- **`CatalogSnapshotService.takeSnapshot(source)`**: дата за Києвом; якщо знімок на цю дату є, повертає `false` і нічого не міняє; інакше зберігає кількість книг. `purgeOlderThan(days)` видаляє знімки старші за `days` (days <= 0 -> `IllegalArgumentException`).
+- **`JobParams`**: `string` і `positiveInt`. Немає ключа (зокрема помилка в імені ключа) -> default; не той тип, порожній рядок, нечисло, <= 0 -> `IllegalArgumentException`.
+- **Завдання**: `execute` бере `getMergedJobDataMap()` (дані тригера поверх даних завдання), викликає сервіс один раз, `RuntimeException` -> лог + `JobExecutionException(e, false)`.
+- **Страхувальний тригер**: якщо вночі застосунок не працював, знімок усе одно зʼявиться. Дубля не буде, бо сервіс ідемпотентний.
 
-**Як це працює технічно.** Spring не змінює `BookService`, а обгортає його проксі-об'єктом. Коли хтось викликає метод ззовні, виклик іде через проксі: той спершу виконує код аспекту, а потім (або замість цього) оригінальний метод.
+- **`CatalogSnapshot`** (сутність, таблиця `catalog_snapshots`): `snapshotDate` (UNIQUE), `bookCount`, `source`, `createdAt`.
+- **`CatalogSnapshotRepository`**: `existsBySnapshotDate`, `findAllByOrderBySnapshotDateDesc`, `deleteOlderThan(cutoff)` (`@Modifying`).
+- **`CatalogSnapshotJob.execute` / `SnapshotRetentionJob.execute`**: описані вище (читання `getMergedJobDataMap()`, один виклик сервісу, `JobExecutionException(e, false)` при збої).
+- **`QuartzAdminController`**: `GET /api/admin/quartz/jobs` (завдання, тригери, misfire, часовий пояс, `JobDataMap`), `POST /api/admin/quartz/jobs/catalog-snapshot/run[?source=]` (негайний запуск, 202), `GET /api/admin/quartz/snapshots`; лише для ADMIN.
+- **Liquibase**: `002-create-quartz-tables.yaml` (+ `002-quartz-tables.sql`, офіційна схема Quartz 2.3.2 для PostgreSQL, `rollback` видаляє таблиці) і `003-create-catalog-snapshots-table.yaml`.
 
-### Три пари «анотація + аспект»
+## 5. Тести
 
-| Анотація | Аспект | Що робить | Приклад у коді |
-|---|---|---|---|
-| `@Audited(action)` | `AuditAspect` (`@AfterReturning`) | після **успішного** виконання записує в журнал, хто й що зробив | `BookService.create/update/delete` |
-| `@RateLimited` | `RateLimitAspect` (`@Around`) | рахує виклики користувача у ковзному вікні часу. Якщо ліміт перевищено, кидає виняток і метод **не виконується** (429) | `BookService.create` |
-| `@Retry` | `RetryAspect` (`@Around`) | якщо метод кинув тимчасову помилку БД, повторює виклик до `maxAttempts` разів | `BookService.findAll/findById` |
+Усього 161 тест (121 було + 40 нових). Нижче всі нові тести. Без `@SpringBootTest`, без `Thread.sleep`, час через `Clock.fixed`.
 
-**Чим відрізняються типи advice.**
-- `@AfterReturning` спрацьовує після методу і не керує його виконанням.
-- `@Around` обгортає метод і сам вирішує, чи викликати його (`proceed()`), скільки разів і що повернути.
-
-### Як аспект знаходить методи
-Pointcut `@annotation(audited)` означає: «спрацюй на кожному методі, що має анотацію `@Audited`». Тому анотації мають `@Retention(RUNTIME)`: інакше під час роботи програми вони були б невидимі.
-
-### За що відповідають допоміжні класи
-
-| Клас | Роль |
-|---|---|
-| `AuditTrail` | пам'ять, де лежать записи аудиту (останні 1000) |
-| `AuditEntry` | один запис: час, користувач, дія, метод, деталі |
-| `CurrentUserName` | дає ім'я користувача з контексту безпеки (або `anonymous`) |
-| `AopConfig` | створює `Clock`, щоб у тестах можна було підставити свій час |
-| `RateLimitExceededException` | виняток, який перетворюється на відповідь 429 |
-| `AopDemoService` | демонстраційні методи для показу ліміту, повтору й самовиклику |
-| `AopDemoController` | ендпоінти `/api/admin/aop-demo/*` (лише ADMIN) для демонстрації |
-
-### Приклад: створення книги
-`POST /api/books` → `BookService.create` проходить через аспекти: `RateLimitAspect` перевіряє ліміт → метод створює книгу → `AuditAspect` записує `CREATE_BOOK` від користувача. Якщо метод кинув виняток (наприклад, дублікат ISBN), запису в аудит немає.
-
-### Проблема самовиклику (свідома)
-- Виклик ззовні (`контролер` → `проксі` → метод): аспект спрацьовує, `auditEntriesAdded = 1`.
-- Виклик усередині того ж класу (`this.auditedAction()`): йде повз проксі, аспект **мовчки не спрацьовує**, помилки немає, `auditEntriesAdded = 0`.
-
-Це обмеження Spring AOP і навмисна демонстрація. Обхід: винести метод в інший бін, інжектити самого себе або AspectJ weaving.
-
-### Як це перевіряється
-- `AuditAspectTest`, `RateLimitAspectTest`, `RetryAspectTest`: `ProceedingJoinPoint` замокано, без Spring. Перевіряється, чи викликається `proceed()` і скільки разів.
-- `SelfInvocationTest`: проксі будується програмно, показує різницю між зовнішнім викликом і самовикликом.
-- Postman-колекція Lab 4: запити 06 і 07 поруч демонструють самовиклик, 08 це повтор, 12 це 429.
-Реалізовано три наскрізні функціональності у вигляді пари «власна анотація + аспект». Кожну застосовано в робочому коді (`BookService`) і додатково показано в демонстраційних ендпоінтах. Окремо продемонстровано проблему самовиклику (self-invocation).
-
-| Анотація | Аспект | Тип advice | Призначення |
-|---|---|---|---|
-| `@Audited(action)` | `AuditAspect` | `@AfterReturning` | після успішного виконання записує в аудит: хто, що й над чим зробив |
-| `@RateLimited(maxCalls, perSeconds)` | `RateLimitAspect` | `@Around` | обмежує частоту викликів для користувача, інакше кидає виняток (429) |
-| `@Retry(maxAttempts, retryOn)` | `RetryAspect` | `@Around` | повторює виклик при тимчасовій помилці |
-
-.
-
-## 3. Усі нові та змінені файли
-
-### Нові файли (`src/main/java/com/example/library/`)
-
-| Файл | Призначення |
-|---|---|
-| `aop/Audited.java` | анотація аудиту, атрибут `action` |
-| `aop/RateLimited.java` | анотація обмеження частоти, атрибути `maxCalls` (10) та `perSeconds` (60) |
-| `aop/Retry.java` | анотація повтору, атрибути `maxAttempts` (3) та `retryOn` (за замовчуванням `TransientDataAccessException`) |
-| `aop/AuditAspect.java` | аспект аудиту |
-| `aop/RateLimitAspect.java` | аспект обмеження частоти |
-| `aop/RetryAspect.java` | аспект повтору |
-| `aop/AuditEntry.java` | `record` запису аудиту: `timestamp`, `user`, `action`, `method`, `details` |
-| `aop/AuditTrail.java` | сховище записів аудиту в пам'яті |
-| `aop/CurrentUserName.java` | допоміжний клас: ім'я поточного користувача |
-| `aop/AopDemoService.java` | демонстраційний сервіс (самовиклик, ліміт, retry) |
-| `controller/AopDemoController.java` | демонстраційні ендпоінти `/api/admin/aop-demo/*` |
-| `exception/RateLimitExceededException.java` | виняток для 429 |
-| `config/AopConfig.java` | бін `Clock` |
-
-Всі анотації мають `@Retention(RUNTIME)` (інакше аспект їх не побачить) і `@Target(METHOD)`.
-
-### Змінені файли
-
-| Файл | Що змінилося |
-|---|---|
-| `service/BookService.java` | `@Retry(maxAttempts = 3)` на `findAll` і `findById`; `@RateLimited(maxCalls = 10, perSeconds = 60)` та `@Audited(action = "CREATE_BOOK")` на `create`; `@Audited(action = "UPDATE_BOOK")` на `update`; `@Audited(action = "DELETE_BOOK")` на `delete`. Тіла методів не змінено |
-| `exception/RestExceptionHandler.java` | `AopDemoController` додано в `assignableTypes`, новий метод `handleRateLimit` для 429 |
-| `RestExceptionHandlerTest` (з Lab 2) | додано тест `handleRateLimit_rateLimitExceeded_returns429WithMessage` |
-| `pom.xml` (необов'язково) | явна залежність `spring-boot-starter-aop` (вона й так приходить через `spring-boot-starter-data-jpa`) |
-
-## 4. Опис кожного класу та його логіки
-
-### 4.1. `AuditAspect`: `@AfterReturning`
-Залежності: `AuditTrail` та `Clock` (через конструктор).
-
-Метод `audit(joinPoint, audited, result)` з pointcut `@annotation(audited)`:
-1. бере користувача (`CurrentUserName.get()`);
-2. бере сигнатуру методу (`joinPoint.getSignature().toShortString()`, наприклад `BookService.create(..)`);
-3. формує деталі `describe(result, args)`:
-   - якщо результат це `BookDto`: `bookId=<id>, isbn=<isbn>`;
-   - якщо перший аргумент це `Long` (випадок `delete`): `bookId=<id>`;
-   - інакше `-`;
-4. створює `AuditEntry` з часом `clock.instant()`, додає в `AuditTrail`, пише рядок у лог `AUDIT`.
-
-`@AfterReturning` виконується **лише якщо метод завершився без винятку**. Якщо `@PreAuthorize` заборонив `delete` або ISBN дубльований, у аудит нічого не потрапляє.
-
-### 4.2. `RateLimitAspect`: `@Around`
-Залежність: `Clock`. Внутрішній стан: `Map<String, Deque<Instant>> calls` (потокобезпечна `ConcurrentHashMap`).
-
-Метод `limit(joinPoint, rateLimited)`:
-1. ключ = `користувач:метод`, тож ліміт окремий для кожного користувача й методу;
-2. `windowStart = now - perSeconds`;
-3. у синхронізованому блоці по черзі видаляє з початку черги часи, які вже не потрапляють у вікно;
-4. якщо в черзі вже `maxCalls` записів, кидає `RateLimitExceededException` з текстом `Rate limit exceeded: at most N calls per M seconds for <метод>` і **не** викликає `proceed()`;
-5. інакше додає поточний час і викликає `joinPoint.proceed()`.
-
-Це «ковзне вікно». Час береться з `Clock`, тому в тестах його можна підмінити.
-
-### 4.3. `RetryAspect`: `@Around`
-Метод `retry(joinPoint, retry)`:
-1. кількість спроб `max(1, maxAttempts)`;
-2. у циклі викликає `joinPoint.proceed()`; при успіху одразу повертає результат;
-3. якщо кинуто виняток, перевіряє `isRetryable` (чи його тип є в `retryOn`). Якщо ні, виняток кидається **одразу** без повторів. Якщо так, пише в лог `Attempt N/M ... failed` і пробує знову;
-4. коли спроби вичерпано, кидає останній виняток.
-
-Затримок між спробами немає (щоб тести не потребували `Thread.sleep`).
-
-### 4.4. `AuditTrail`
-Колекція `ArrayDeque<AuditEntry>` з методами `add`, `entries`, `size` (всі `synchronized`). Зберігає максимум 1000 останніх записів: при перевищенні видаляє найстаріший. Дані в пам'яті, після перезапуску губляться.
-
-### 4.5. `CurrentUserName`
-Пакетно-приватний допоміжний клас. `get()` бере `Authentication` із `SecurityContextHolder`. Якщо його немає, повертає `anonymous`, інакше `authentication.getName()`.
-
-### 4.6. `AopConfig`
-Оголошує бін `Clock` (`Clock.systemUTC()`). Аспекти отримують годинник через конструктор, завдяки чому в тестах підставляється фіксований час.
-
-### 4.7. `RateLimitExceededException`
-`RuntimeException` з `@ResponseStatus(TOO_MANY_REQUESTS)`. У REST-контролерах її перехоплює `RestExceptionHandler.handleRateLimit` і повертає `ProblemDetail` зі статусом 429.
-
-### 4.8. `AopDemoService`
-| Метод | Призначення |
-|---|---|
-| `auditedAction()` з `@Audited(action = "DEMO_ACTION")` | анотований метод |
-| `callsAuditedActionInternally()` | викликає `this.auditedAction()`: **самовиклик** |
-| `limitedAction()` з `@RateLimited(maxCalls = 3, perSeconds = 30)` | показ ліміту (3 виклики за 30 с) |
-| `flakyLookup(counter, failuresBeforeSuccess)` з `@Retry(maxAttempts = 3)` | імітує тимчасову помилку: перші N викликів кидають `TransientDataAccessResourceException`, далі успіх. Повертає номер успішного виклику |
-
-### 4.9. `AopDemoController` (`/api/admin/aop-demo`, лише ADMIN)
-Шлях під `/api/admin/**`, тому правило `SecurityFilterChain` пропускає тільки ADMIN.
-
-| Ендпоінт | Що робить |
-|---|---|
-| `GET /audit` | список записів аудиту |
-| `GET /audited-external` | викликає `demoService.auditedAction()`, повертає `auditEntriesAdded` (різниця розміру журналу): **1** |
-| `GET /audited-self-invocation` | викликає `callsAuditedActionInternally()`: **0** |
-| `GET /rate-limited` | викликає `limitedAction()` |
-| `GET /retry?failures=N` | викликає `flakyLookup` і повертає `attempts` |
-
-## 5. Порядок аспектів
-
-`@Order`: Retry (1), RateLimit (2), Audit (3). Менше число означає зовнішній шар. Вони виконуються раніше за транзакції та перевірки безпеки, тому:
-- кожна спроба retry отримує свою транзакцію;
-- аудит записується лише після успішного завершення методу (після транзакції й перевірки `@PreAuthorize`).
-
-`@Retry` застосовано лише до читання (`findAll`, `findById`): повтор ідемпотентний. Повторювати `create` не можна, це могло б створити дублікати.
-
-## 6. Самовиклик (self-invocation)
-
-У `AopDemoService` метод `auditedAction()` має `@Audited`.
-- **Зовнішній виклик** (контролер → проксі → метод): аспект спрацьовує, `auditEntriesAdded = 1`.
-- **Самовиклик** (`callsAuditedActionInternally()` викликає `this.auditedAction()` в тому ж класі): виклик іде безпосередньо до об'єкта, повз проксі. Метод виконується, але аспект **мовчки не спрацьовує**, помилки немає, `auditEntriesAdded = 0`.
-
-Це обмеження проксі-моделі Spring AOP і свідомий задум вправи. Обхід: винести метод в інший бін, інжектити самого себе або використати AspectJ weaving.
-
-## 7. Тести (15 нових)
-
-Жоден тест не використовує Spring-контекст, БД, мережу чи `Thread.sleep`.
-
-### `aop/AuditAspectTest` (3)
-`JoinPoint`, `Signature`, `AuditTrail` замокано, `Clock` фіксований, користувач задається через `TestingAuthenticationToken` у `SecurityContextHolder` (очищується після кожного тесту).
+### JobParamsTest
 
 | Тест | Що перевіряє |
 |---|---|
-| `audit_createReturnsBookDto_recordsUserActionAndBookDetails` | `ArgumentCaptor` ловить `AuditEntry`: користувач `alice`, дія `CREATE_BOOK`, метод, деталі `bookId=7, isbn=...`, час |
-| `audit_voidDeleteWithIdArgument_recordsBookIdFromArgument` | результат `null`, id береться з аргументів: `bookId=5` |
-| `audit_noAuthentication_recordsAnonymousUser` | без автентифікації користувач `anonymous`, деталі `-` |
+| `string_keyMissing_returnsDocumentedDefault` | ключа немає: повертається значення за замовчуванням |
+| `string_keyPresent_returnsValue` | ключ є: повертається його значення |
+| `string_keyWithTypoInName_isTreatedAsMissingAndFallsBackToDefault` | помилка в імені ключа = ключа немає: значення за замовчуванням |
+| `string_wrongTypeOrBlank_throwsIllegalArgument` | неправильний тип або порожній рядок: `IllegalArgumentException` |
+| `positiveInt_keyMissing_returnsDefault` | число: ключа немає - значення за замовчуванням |
+| `positiveInt_integerOrNumericString_isParsed` | `Integer` і рядок-число розбираються правильно |
+| `positiveInt_notANumber_throwsIllegalArgument` | не число: `IllegalArgumentException` |
+| `positiveInt_zeroOrNegative_throwsIllegalArgument` | 0 і від'ємні значення: `IllegalArgumentException` |
 
-### `aop/RateLimitAspectTest` (4)
-Замокано **`ProceedingJoinPoint`**. Власний `MutableClock` дає змогу «перемотати» час викликом `advance(...)` замість `Thread.sleep`. Ліміт у тестовій анотації 2 виклики за 30 с.
-
-| Тест | Що перевіряє |
-|---|---|
-| `limit_callsWithinLimit_proceedAndReturnResult` | два виклики: `proceed()` викликано 2 рази, повернуто результат |
-| `limit_callOverLimit_throwsAndDoesNotProceed` | третій виклик кидає `RateLimitExceededException`, `proceed()` лишається 2 рази |
-| `limit_afterWindowExpires_allowsCallsAgain` | після `advance(31 с)` виклик знову дозволено |
-| `limit_differentUsers_haveIndependentCounters` | інший користувач (`bob`) має власний лічильник |
-
-### `aop/RetryAspectTest` (4)
-Замокано `ProceedingJoinPoint`, перевіряється, скільки разів викликається `proceed()`.
+### CatalogSnapshotServiceTest
 
 | Тест | Що перевіряє |
 |---|---|
-| `retry_succeedsOnFirstAttempt_proceedsOnlyOnce` | 1 виклик |
-| `retry_failsTwiceThenSucceeds_returnsResultAfterThreeAttempts` | два збої, потім успіх: 3 виклики, результат повернуто |
-| `retry_alwaysFails_throwsLastExceptionAfterMaxAttempts` | 3 збої: кинуто останній виняток (`fail 3`), 3 виклики |
-| `retry_nonRetryableException_rethrowsImmediatelyWithoutRetry` | `IllegalStateException` не з переліку: кинуто одразу, 1 виклик |
+| `takeSnapshot_noSnapshotForToday_savesCountWithKyivDateAndReturnsTrue` | знімка немає: зберігає кількість книг із київською датою (23:30 UTC = наступний день), повертає `true` |
+| `takeSnapshot_snapshotForTodayExists_changesNothingAndReturnsFalse` | знімок за сьогодні вже є: нічого не змінює, повертає `false` |
+| `takeSnapshot_runTwiceForSameDay_secondRunChangesNothing` | **ідемпотентність**: два запуски за день дають рівно один `save` |
+| `purgeOlderThan_validDays_deletesBeforeCutoffAndReturnsCount` | видаляє знімки старші за межу і повертає кількість |
+| `purgeOlderThan_runTwice_secondRunRemovesNothing` | повторне очищення видаляє 0 |
+| `purgeOlderThan_nonPositiveDays_throwsAndDeletesNothing` | днів <= 0: виняток, нічого не видаляється |
+| `findAll_snapshotsExist_returnsRepositoryOrder` | повертає знімки в порядку репозиторію |
 
-### `aop/SelfInvocationTest` (3)
-Проксі будується програмно через `AspectJProxyFactory` (без Spring-контексту) з реальним `AuditAspect` і `AuditTrail`.
+### CatalogSnapshotJobTest
 
 | Тест | Що перевіряє |
 |---|---|
-| `externalCall_annotatedMethod_aspectRecordsAuditEntry` | зовнішній виклик: 1 запис з дією `DEMO_ACTION` |
-| `selfInvocation_sameAnnotatedMethod_aspectIsBypassedSilently` | самовиклик: метод виконався, записів немає, помилки немає |
-| `sameMethodTwoWays_onlyTheExternalCallIsAudited` | обидва способи підряд дають рівно 1 запис |
+| `execute_sourceProvided_callsServiceExactlyOnceWithIt` | завдання викликає сервіс рівно один раз із переданим `source` |
+| `execute_sourceMissing_usesDocumentedDefaultDaily` | `source` немає: використовується `daily` |
+| `execute_sourceHasWrongType_failsWithoutRefireAndDoesNotCallService` | `source` неправильного типу: `JobExecutionException` без refire, сервіс не викликано |
+| `execute_serviceThrows_errorIsRecordedWithoutRefireAndServiceCalledOnlyOnce` | збій сервісу: помилка фіксується, refire немає, сервіс викликано один раз (нескінченного циклу немає) |
 
-### `RestExceptionHandlerTest` (+1)
-`handleRateLimit_rateLimitExceeded_returns429WithMessage`: статус 429 і текст винятку.
+### SnapshotRetentionJobTest
 
-## 8. Відповідність сценаріям із завдання
-
-| Сценарій | Як виконано |
+| Тест | Що перевіряє |
 |---|---|
-| Анотація з `RUNTIME` і `@Target` пов'язана з аспектом | три анотації, у кожному аспекті pointcut `@annotation(...)` |
-| Поведінка аспекту спрацьовує | запис в аудит і лог; виняток 429; повторний виклик |
-| Зовнішній виклик активує аспект | контролер → бін → проксі → advice; Postman 02, 06, 08, 09-12; `SelfInvocationTest` |
-| Самовиклик не активує аспект | `callsAuditedActionInternally()` → `this.auditedAction()`; Postman 07; `SelfInvocationTest` |
-| Advice тестується unit-тестом з mock `ProceedingJoinPoint` | `RateLimitAspectTest` та `RetryAspectTest`, без Spring-контексту, перевіряється чи (і скільки разів) викликається `proceed()` |
+| `execute_retentionDaysProvided_callsServiceOnceWithIt` | викликає `purgeOlderThan` один раз із переданим числом днів |
+| `execute_retentionDaysMissing_usesDocumentedDefault90` | `retentionDays` немає: використовується 90 |
+| `execute_retentionDaysMalformed_failsWithoutCallingService` | `"ninety"`: виняток, сервіс не викликано |
+| `execute_serviceThrows_noRefireAndServiceCalledOnce` | збій сервісу: без refire, один виклик |
 
-## 9. Запуск і перевірка
+### QuartzConfigTest
+
+| Тест | Що перевіряє |
+|---|---|
+| `jobDetails_declared_haveExplicitNameAndGroup` | завдання мають явні `name` і `group`, правильні класи |
+| `triggers_declared_haveExplicitUniqueNamesAndPointToExistingJobsByJobKey` | тригери мають унікальні імена й групу та вказують на існуючі завдання через `JobKey` |
+| `snapshotJob_hasTwoTriggers` | у завдання знімка рівно два тригери |
+| `mergedJobDataMap_triggerOverridesOneKey_otherJobDefaultsStay` | злиття `JobDataMap` як у Quartz: тригер перекриває `source`, `triggeredBy` лишається за замовчуванням |
+| `mergedJobDataMap_triggerWithoutOverride_usesJobDefaults` | тригер без перекриття: значення завдання |
+| `mergedJobDataMap_retentionTrigger_overridesDefault90With180` | `retentionDays` 90 перекрито тригером до 180 |
+| `jobDetails_declared_disallowConcurrentExecution` | `@DisallowConcurrentExecution` на обох завданнях |
+| `dailyTrigger_misfireInstruction_isFireOnceNow` | misfire щоденного тригера: `FIRE_ONCE_NOW` |
+| `catchUpTrigger_misfireInstruction_isRescheduleNextWithRemainingCount` | misfire страхувального тригера: `RESCHEDULE_NEXT_WITH_REMAINING_COUNT` |
+| `weeklyRetentionTrigger_misfireInstruction_isDoNothing` | misfire тижневого тригера: `DO_NOTHING` |
+| `cronTriggers_declared_haveExplicitKyivTimeZoneNotGmt` | ідентифікатор часового поясу cron-тригерів: `Europe/Kyiv` |
+| `timeZone_unknownId_isSilentlyReplacedByGmtSoConfiguredIdMustBeVerified` | невідомий ідентифікатор замінюється на `GMT`, тому справжній ID перевіряється |
+| `dailyTrigger_nextFireTime_is0200KyivRegardlessOfServerZone` | наступний запуск о 02:00 за Києвом влітку (UTC+3) і взимку (UTC+2) |
+
+### QuartzAdminControllerTest
+
+| Тест | Що перевіряє |
+|---|---|
+| `runSnapshot_noSource_triggersJobWithoutOverrideAndReturns202` | `POST .../run`: 202, завдання запущено без перекриття |
+| `runSnapshot_withSource_passesSourceOverrideInJobDataMap` | `?source=manual`: перекриття передано в `JobDataMap` |
+| `snapshots_snapshotsExist_returnsThemAsJson` | `GET snapshots`: знімки в JSON (дата як ISO-рядок) |
+| `jobs_cronTriggerScheduled_returnsJobWithTriggerMisfireAndTimeZone` | `GET jobs`: завдання з тригером, misfire та часовим поясом |
+
+## 6. Відповідність Acceptance Criteria
+
+| Сценарій | Як виконано | Де видно |
+|---|---|---|
+| Завдання й тригери в одному `@Configuration`, `JobKey`, name+group | `QuartzConfig` | `QuartzConfigTest` (імена/групи, `JobKey`); Postman 03 |
+| Параметри тригера мають пріоритет | `usingJobData` у тригері, `getMergedJobDataMap()` | `mergedJobDataMap_*` тести; Postman 03 (`data.source`, `retentionDays`) |
+| Завдання «легкі» | читання параметрів + один виклик сервісу | `CatalogSnapshotJobTest`, `verifyNoMoreInteractions(service)` |
+| Неправильний/відсутній ключ | default або `IllegalArgumentException` | `JobParamsTest`, `execute_sourceMissing_...`, `execute_sourceHasWrongType_...` |
+| Заборона паралельного виконання | `@DisallowConcurrentExecution` | `jobDetails_declared_disallowConcurrentExecution`; у БД `is_nonconcurrent = t` |
+| Misfire визначено для кожного тригера | три різні інструкції | `*_misfireInstruction_*` тести; Postman 03; `qrtz_triggers.misfire_instr` |
+| Cron не залежить від часового поясу сервера | `inTimeZone(Europe/Kyiv)` | `cronTriggers_declared_haveExplicitKyivTimeZoneNotGmt`; `qrtz_cron_triggers.time_zone_id` |
+| Повторний запуск безпечний | перевірка за датою + UNIQUE | `takeSnapshot_runTwiceForSameDay_...`; Postman 04-07 |
+| Невдале виконання обробляється | лог + `JobExecutionException(e, false)`, без повторів | `execute_serviceThrows_...` (сервіс викликано 1 раз) |
+| Розклад у БД через Liquibase | changeset 002 + `initialize-schema: never` | `qrtz_*` у БД (11 таблиць), `DATABASECHANGELOG` |
+
+## 7. Запуск і перевірка
 
 ```
-mvn clean test          # очікується: Tests run: 88 (73 + 15), Failures: 0
+mvn clean test        # очікується: Tests run: 161, Failures: 0, BUILD SUCCESS
 ```
-Ручна перевірка: Postgres, Keycloak, `LibraryApplication`, імпорт `postman/Library.lab4.postman_collection.json`, Run.
+Живий запуск: Postgres, Keycloak, `LibraryApplication` (Liquibase створить `QRTZ_*` і `catalog_snapshots`), потім `postman/Library.lab6.postman_collection.json` (Run; всі 9 запитів зелені, 20 перевірок). Перевірка в БД:
+```
+select job_name, is_nonconcurrent from qrtz_job_details;
+select trigger_name, trigger_type, misfire_instr from qrtz_triggers;
+select cron_expression, time_zone_id from qrtz_cron_triggers;
+```
+Очікується 2 завдання, 3 тригери (cron/cron/simple), misfire 1/2/4, часовий пояс `Europe/Kyiv`. Після перезапуску застосунку кількість завдань і тригерів не змінюється (`overwrite-existing-jobs: true`). У логах: `CatalogSnapshotJob: source=catch-up ... created=true`, а наступні запуски `created=false`.
 
-| Запит | Очікування |
-|---|---|
-| 02 | 201: `create` пройшов через `@RateLimited` та `@Audited` |
-| 03 | є запис `CREATE_BOOK` від `admin` |
-| 05 | є запис `DELETE_BOOK` |
-| 06 | `auditEntriesAdded = 1` |
-| 07 | `auditEntriesAdded = 0`, але 200 (самовиклик) |
-| 08 | `attempts = 3` |
-| 09-11 | 200 (у межах ліміту) |
-| 12 | 429 з `Rate limit exceeded` |
+Результат: тестів 161 (Failures 0, Errors 0), Postman 9/9.
 
-У логах IntelliJ видно рядки `AUDIT : user=admin action=CREATE_BOOK ...` і `Attempt 1/3 ... failed`. Між двома запусками колекції потрібно зачекати понад 30 с через ліміт `/rate-limited`.
+## 8. Обмеження та примітки
 
-Результат: тестів пройшло ___, запитів зелених ___.
-
-## 10. Обмеження
-
-- `AuditTrail` зберігає записи в пам'яті (останні 1000), після перезапуску вони губляться.
-- Rate limit рахується в пам'яті одного екземпляра (для кластера потрібне спільне сховище, наприклад Redis).
-- `AuditAspect.describe` знає лише про `BookDto` та id-аргумент, для інших сутностей його потрібно розширити.
-- Retry не має затримки між спробами (спрощення для детермінованих тестів).
+- Ідемпотентність у юніт-тесті перевірена з Mockito; реальну БД перевірено живим запуском і Postman, окремого інтеграційного тесту з БД немає (за умовою без Postgres юніт-тести працюють).
+- Кластерного режиму немає (`isClustered=false`), один екземпляр застосунку.
+- Cron-розклад (02:00, неділя 03:00) у Postman не чекається; завдання запускаються вручну через `POST .../run`, а розклад видно в `GET .../jobs`.
+- Страхувальний тригер із `startNow` спрацьовує при кожному старті застосунку (безпечно через ідемпотентність).
+- Єдиний `Clock` проєкту (UTC з `AopConfig`) не змінювався; київська зона застосовується тільки в `CatalogSnapshotService`.
