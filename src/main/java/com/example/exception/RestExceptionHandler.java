@@ -1,11 +1,16 @@
 package com.example.library.exception;
 import com.example.library.controller.AopDemoController;
+import com.example.library.controller.AsyncDemoController;
+import com.example.library.controller.BookReportRestController;
 import com.example.library.controller.AdminRestController;
 import com.example.library.controller.BookRestController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.core.task.TaskRejectedException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -13,7 +18,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.stream.Collectors;
 
-@RestControllerAdvice(assignableTypes = {BookRestController.class, AdminRestController.class, AopDemoController.class})
+@RestControllerAdvice(assignableTypes = {BookRestController.class, AdminRestController.class, AopDemoController.class,
+        BookReportRestController.class, AsyncDemoController.class})
 public class RestExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(RestExceptionHandler.class);
@@ -45,5 +51,16 @@ public class RestExceptionHandler {
         log.warn("@PreAuthorize denied access: {}", ex.getMessage());
         return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN,
                 "Denied by method security (@PreAuthorize): ADMIN role required");
+    }
+
+    // Пул потоків і черга переповнені: явне рішення - 503 + Retry-After, а не випадкова 500
+    @ExceptionHandler(TaskRejectedException.class)
+    public ResponseEntity<ProblemDetail> handleTaskRejected(TaskRejectedException ex) {
+        log.warn("Async executor rejected a task: {}", ex.getMessage());
+        ProblemDetail body = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+                "Server is busy, please try again later");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "5")
+                .body(body);
     }
 }
