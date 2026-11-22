@@ -1,0 +1,16 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002-create-quartz-tables
+      author: student
+      changes:
+        - sqlFile:
+            path: 002-quartz-tables.sql
+            relativeToChangelogFile: true
+            splitStatements: true
+            stripComments: true
+      rollback:
+        - sql:
+            sql: >
+              DROP TABLE IF EXISTS qrtz_fired_triggers, qrtz_paused_trigger_grps, qrtz_scheduler_state, qrtz_locks,
+              qrtz_simple_triggers, qrtz_cron_triggers, qrtz_simprop_triggers, qrtz_blob_triggers,
+              qrtz_triggers, qrtz_job_details, qrtz_calendars
